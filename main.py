@@ -1,6 +1,6 @@
 import pyrogram
 from pyrogram import Client, filters
-from pyrogram.errors import UserAlreadyParticipant, InviteHashExpired, FloodWait
+from pyrogram.errors import UserAlreadyParticipant, InviteHashExpired, FloodWait, PeerIdInvalid
 from pyrogram.types import Message
 
 import time
@@ -60,7 +60,7 @@ async def start(bot: Client, m: Message):
         "**I am a simple save restricted bot.**\n\n"
         "Send one or more message links, or a range like:\n"
         "`https://t.me/channel/100 - 200`\n\n"
-        "Must join: @Bypass_restricted"
+        "For private chats, send the invite link first."
     )
 
 # --------------- Main handler ---------------
@@ -80,12 +80,12 @@ def save(client: Client, message: Message):
             bot.send_message(message.chat.id, "**Invite link has expired.**", reply_to_message_id=message.id)
         return
 
-    # 2. Range detection (e.g., https://t.me/.../1612 - 2000)
+    # 2. Range detection
     range_match = re.match(
         r'(https://t\.me/(?:c/)?[^/\s]+)/(\d+)\s*-\s*(\d+)$', text
     )
     if range_match:
-        base_link = range_match.group(1)          # https://t.me/... or https://t.me/c/...
+        base_link = range_match.group(1)
         start_id = int(range_match.group(2))
         end_id = int(range_match.group(3))
 
@@ -99,7 +99,7 @@ def save(client: Client, message: Message):
         for msg_id in range(start_id, end_id + 1):
             link = f"{base_link}/{msg_id}"
             process_single_link(link, message, current=msg_id - start_id + 1, total=total)
-            time.sleep(2)  # avoid FloodWait
+            time.sleep(2)
         return
 
     # 3. Multiple links (bulk)
@@ -127,6 +127,14 @@ def process_single_link(link, original_msg, current=0, total=0):
         chatid = int("-100" + datas[-2])
         try:
             with acc:
+                # Check access first – this gives a clear error if the chat is forbidden
+                try:
+                    acc.get_chat(chatid)
+                except PeerIdInvalid:
+                    reply("❌ **Your session account is not a member of this private chat.**\n"
+                          "Send the correct invite link for this chat first, or ask an admin to add the account.")
+                    return
+
                 msg = acc.get_messages(chatid, msgid)
             if msg is None:
                 reply(f"❌ Message not found: {link}")
@@ -136,7 +144,6 @@ def process_single_link(link, original_msg, current=0, total=0):
                 reply(msg.text)
                 return
 
-            # Download & re-upload media
             sid = f"{original_msg.id}_{current}"
             down_file = f"{sid}downstatus.txt"
             up_file = f"{sid}upstatus.txt"
@@ -167,7 +174,6 @@ def process_single_link(link, original_msg, current=0, total=0):
                         thumb = acc.download_media(msg.audio.thumbs[0].file_id)
                 except: pass
 
-            # Send media
             if "Document" in str(msg):
                 bot.send_document(original_msg.chat.id, file, thumb=thumb,
                                   caption=msg.caption, caption_entities=msg.caption_entities,
@@ -203,6 +209,9 @@ def process_single_link(link, original_msg, current=0, total=0):
         except FloodWait as e:
             time.sleep(e.x)
             reply(f"⚠️ Flood wait – retrying after {e.x}s")
+        except PeerIdInvalid:
+            reply("❌ **Your session account is not a member of this private chat.**\n"
+                  "Send the correct invite link for this chat first, or ask an admin to add the account.")
         except Exception as e:
             reply(f"⚠️ Failed: {link} – {e}")
 
